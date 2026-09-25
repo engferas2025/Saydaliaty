@@ -179,6 +179,7 @@ function afterLogin() {
   buildTabbar();
   showScreen('dashboard');
   Sync.fullSync();
+  maybeShowInstallBanner();
 }
 
 function logout() {
@@ -509,29 +510,39 @@ async function renderInventory() {
 // ENTRY (تسجيل عملية: إدخال / صرف / تسليم)
 // ============================================================
 State.entryType = 'in';
+let _medsCache = [];
 
 async function renderEntry() {
   const [meds, places, users] = await Promise.all([DB.getAll('medicines'), DB.getAll('places'), DB.getAll('users')]);
-  const medSel = document.getElementById('entry-medicine');
-  medSel.innerHTML = `<option value="__new__">+ إضافة دواء جديد</option>` +
-    meds.sort((a, b) => a.name.localeCompare(b.name, 'ar')).map(m => `<option value="${m.id}">${m.name} (المتبقي: ${(m.quantity || 0).toLocaleString('ar')})</option>`).join('');
+  _medsCache = meds;
 
-  const placeSel = document.getElementById('entry-place');
-  placeSel.innerHTML = places.length
-    ? places.map(p => `<option value="${p.name}">${p.name}</option>`).join('')
-    : `<option value="">لا يوجد أماكن — يضيفها المشرف من تبويب الأماكن</option>`;
+  const medDatalist = document.getElementById('medicine-options');
+  medDatalist.innerHTML = meds.sort((a, b) => a.name.localeCompare(b.name, 'ar'))
+    .map(m => `<option value="${m.name}">${(m.quantity || 0).toLocaleString('ar')} متبقي</option>`).join('');
+  document.getElementById('entry-medicine-input').value = '';
+
+  const placeDatalist = document.getElementById('place-options');
+  placeDatalist.innerHTML = places.map(p => `<option value="${p.name}">`).join('');
+  document.getElementById('entry-place-input').value = '';
+  document.getElementById('entry-place-input').placeholder = places.length ? 'اكتب أو اختر اسم المكان' : 'لا يوجد أماكن — يضيفها المشرف من تبويب الأماكن';
 
   const nurseSel = document.getElementById('entry-to-nurse');
   nurseSel.innerHTML = users.filter(u => u.id !== State.user.id && u.role === 'nurse')
     .map(u => `<option value="${u.id}">${u.name}</option>`).join('') || `<option value="">لا يوجد ممرضين آخرين</option>`;
 
-  onMedicineChange();
+  onMedicineInputChange();
   setEntryType(State.entryType);
 }
 
-function onMedicineChange() {
-  const isNew = document.getElementById('entry-medicine').value === '__new__';
-  document.getElementById('new-medicine-fields').style.display = isNew ? 'block' : 'none';
+function findMedicineByName(name) {
+  const norm = name.trim().toLowerCase();
+  return _medsCache.find(m => m.name.trim().toLowerCase() === norm);
+}
+
+function onMedicineInputChange() {
+  const typed = document.getElementById('entry-medicine-input').value.trim();
+  const match = typed ? findMedicineByName(typed) : null;
+  document.getElementById('new-medicine-fields').style.display = (typed && !match) ? 'block' : 'none';
 }
 
 function setEntryType(t) {
@@ -541,50 +552,54 @@ function setEntryType(t) {
   document.getElementById('entry-field-to-nurse').style.display = t === 'transfer' ? 'block' : 'none';
   document.getElementById('entry-field-delivered-by').style.display = t === 'in' ? 'block' : 'none';
   document.getElementById('entry-submit').textContent = t === 'in' ? 'تسجيل الإدخال' : t === 'out' ? 'تسجيل الصرف' : 'تسجيل التسليم';
+  document.getElementById('entry-submit').disabled = false; // إعادة تفعيل الزر كل ما نفتح الشاشة أو نبدّل النوع
 }
 
 async function submitEntry(ev) {
   ev.preventDefault();
-  const medSelVal = document.getElementById('entry-medicine').value;
+  const medicineTyped = document.getElementById('entry-medicine-input').value.trim();
   const qty = Number(document.getElementById('entry-qty').value);
+  if (!medicineTyped) { toast('اكتب اسم الدواء'); return; }
   if (!qty || qty <= 0) { toast('أدخل كمية صحيحة'); return; }
 
-  let medicineId = medSelVal, medicineName = '';
-  if (medSelVal === '__new__') {
-    const name = document.getElementById('new-medicine-name').value.trim();
-    const unit = document.getElementById('new-medicine-unit').value.trim();
-    if (!name) { toast('أدخل اسم الدواء'); return; }
-    medicineId = uid();
-    medicineName = name;
-    await DB.put('medicines', { id: medicineId, name, unit, quantity: 0, dirty: true, createdBy: State.user.name, createdAt: nowIso() });
+  let medicineId, medicineName;
+  const existing = findMedicineByName(medicineTyped);
+  if (existing) {
+    medicineId = existing.id; medicineName = existing.name;
   } else {
-    const med = await DB.get('medicines', medicineId);
-    medicineName = med.name;
+    const unit = document.getElementById('new-medicine-unit').value.trim();
+    medicineId = uid(); medicineName = medicineTyped;
+    await DB.put('medicines', { id: medicineId, name: medicineName, unit, quantity: 0, dirty: true, createdBy: State.user.name, createdAt: nowIso() });
   }
 
+  let extra = {};
+  if (State.entryType === 'in') {
+    const deliveredBy = document.getElementById('entry-delivered-by').value.trim();
+    if (!deliveredBy) { toast('أدخل اسم من قام بالتسليم'); return; }
+    extra = { type: 'in', deliveredBy };
+  } else if (State.entryType === 'out') {
+    const placeTyped = document.getElementById('entry-place-input').value.trim();
+    const places = await DB.getAll('places');
+    const placeMatch = places.find(p => p.name.trim().toLowerCase() === placeTyped.toLowerCase());
+    if (!placeMatch) { toast('اختر مكاناً من القائمة — إذا كان جديداً اطلب من المشرف إضافته'); return; }
+    extra = { type: 'out', place: placeMatch.name };
+  } else {
+    const toNurseId = document.getElementById('entry-to-nurse').value;
+    if (!toNurseId) { toast('اختر الممرض المستلم'); return; }
+    const toNurse = await DB.get('users', toNurseId);
+    extra = { type: 'transfer', fromNurseId: State.user.id, fromNurseName: State.user.name, toNurseId, toNurseName: toNurse.name };
+  }
+
+  document.getElementById('entry-submit').disabled = true; // منع الضغط المزدوج
   const base = {
     id: uid(), medicineId, medicineName, qty,
     nurseId: State.user.id, nurseName: State.user.name,
     timestamp: nowIso(), dirty: true, reviewed: false, overIssue: false,
   };
-
-  if (State.entryType === 'in') {
-    const deliveredBy = document.getElementById('entry-delivered-by').value.trim();
-    if (!deliveredBy) { toast('أدخل اسم من قام بالتسليم'); return; }
-    await DB.put('movements', { ...base, type: 'in', deliveredBy });
-  } else if (State.entryType === 'out') {
-    const place = document.getElementById('entry-place').value;
-    if (!place) { toast('اختر المكان المستفيد'); return; }
-    await DB.put('movements', { ...base, type: 'out', place });
-  } else {
-    const toNurseId = document.getElementById('entry-to-nurse').value;
-    if (!toNurseId) { toast('اختر الممرض المستلم'); return; }
-    const toNurse = await DB.get('users', toNurseId);
-    await DB.put('movements', { ...base, type: 'transfer', fromNurseId: State.user.id, fromNurseName: State.user.name, toNurseId, toNurseName: toNurse.name });
-  }
-
+  await DB.put('movements', { ...base, ...extra });
   document.getElementById('entry-form').reset();
   await Inventory.recompute();
+  if (navigator.vibrate) navigator.vibrate(60);
   toast('تم الحفظ — راح يتزامن تلقائياً عند توفر الانترنت');
   showScreen('dashboard');
   Sync.fullSync();
@@ -724,18 +739,20 @@ async function deletePlace(id) {
 // ============================================================
 async function renderSettings() {
   document.getElementById('settings-user-name').textContent = State.user.name;
-  document.getElementById('settings-user-role').textContent = State.user.role === 'admin' ? 'مشرف' : 'ممرض';
+  document.getElementById('settings-user-role').textContent = State.user.role === 'admin' ? 'مشرف' : State.user.role === 'developer' ? 'مطوّر' : 'ممرض';
   document.getElementById('my-phone').value = State.user.phone || '';
   const lastSync = await DB.getMeta('lastSync');
   document.getElementById('settings-last-sync').textContent = lastSync ? fmtDate(lastSync) : 'لم تتم أي مزامنة بعد';
   document.getElementById('settings-api-url').value = await Sync.getEndpoint();
   await renderApiUrlSection();
   document.getElementById('font-scale-label').textContent = Math.round(parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--font-scale')) * 100) + '%';
+  refreshInstallUI();
 
   const isAdminOrDev = State.user.role === 'admin' || State.user.role === 'developer';
   const isDev = State.user.role === 'developer';
   document.getElementById('settings-admin-only').style.display = isAdminOrDev ? 'block' : 'none';
   document.getElementById('settings-dev-only').style.display = isDev ? 'block' : 'none';
+  document.getElementById('settings-backup-section').style.display = isAdminOrDev ? 'block' : 'none';
   if (isAdminOrDev) renderUsersAdmin();
 }
 
@@ -766,6 +783,23 @@ async function toggleUserActive(id) {
   renderUsersAdmin();
   toast(user.active === false ? 'تم تعطيل الحساب' : 'تم تفعيل الحساب');
   Sync.fullSync();
+}
+
+async function exportBackup() {
+  const [users, medicines, places, movements] = await Promise.all([
+    DB.getAll('users'), DB.getAll('medicines'), DB.getAll('places'), DB.getAll('movements')
+  ]);
+  const data = { exportedAt: nowIso(), users, medicines, places, movements };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `saydaliaty-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast('تم تنزيل النسخة الاحتياطية');
 }
 
 async function editUserPhone(id) {
@@ -897,18 +931,72 @@ function checkCaptcha() {
   }
 }
 
+// ============================================================
+// التثبيت على الجهاز (موبايل وكمبيوتر) + تذكير تلقائي
+// ============================================================
 let deferredInstallPrompt = null;
+
+function isStandalone() {
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+function isIOS() {
+  return /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   deferredInstallPrompt = e;
-  const btn = document.getElementById('install-btn');
-  if (btn) btn.style.display = 'block';
+  refreshInstallUI();
 });
-async function installApp() {
-  if (!deferredInstallPrompt) { toast('التثبيت غير متاح على هذا المتصفح حالياً — جرّب "إضافة إلى الشاشة الرئيسية" من قائمة المتصفح'); return; }
-  deferredInstallPrompt.prompt();
-  await deferredInstallPrompt.userChoice;
+window.addEventListener('appinstalled', () => {
   deferredInstallPrompt = null;
+  toast('تم تثبيت التطبيق ✅');
+  refreshInstallUI();
+  dismissInstallBanner();
+});
+
+function refreshInstallUI() {
+  const statusEl = document.getElementById('install-status');
+  if (!statusEl) return;
+  statusEl.textContent = isStandalone() ? 'مثبّت على هذا الجهاز ✅' : 'غير مثبّت بعد';
+}
+
+async function installApp() {
+  if (isStandalone()) { toast('التطبيق مثبّت بالفعل على هذا الجهاز ✅'); return; }
+
+  if (deferredInstallPrompt) {
+    deferredInstallPrompt.prompt();
+    const choice = await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    if (choice.outcome === 'accepted') { toast('تم تثبيت التطبيق ✅'); refreshInstallUI(); }
+    return;
+  }
+
+  if (isIOS()) {
+    openSheet(`
+      <h3 style="margin-bottom:.8rem">تثبيت على آيفون</h3>
+      <p style="font-size:.9rem;line-height:1.9;margin-bottom:1rem">
+        1) اضغط زر المشاركة <b>Share</b> (المربّع مع السهم لفوق) بأسفل الشاشة بمتصفح سفاري.<br>
+        2) مرّر لتحت واختر <b>"إضافة إلى الشاشة الرئيسية"</b> (Add to Home Screen).<br>
+        3) اضغط <b>"إضافة"</b> بالأعلى.
+      </p>
+      <button class="btn btn-primary" onclick="closeSheet()">فهمت</button>
+    `);
+    return;
+  }
+
+  toast('متصفحك الحالي لا يدعم التثبيت المباشر — جرّب Chrome أو Edge');
+}
+
+function maybeShowInstallBanner() {
+  if (isStandalone()) return;
+  const snoozeUntil = Number(localStorage.getItem('saydaliaty-install-snooze') || 0);
+  if (Date.now() < snoozeUntil) return;
+  document.getElementById('install-banner').classList.add('show');
+}
+function dismissInstallBanner() {
+  document.getElementById('install-banner').classList.remove('show');
+  localStorage.setItem('saydaliaty-install-snooze', String(Date.now() + 3 * 24 * 60 * 60 * 1000));
 }
 
 // ============================================================
@@ -955,6 +1043,7 @@ async function init() {
   if (!restored) {
     document.getElementById('screen-login-wrap').style.display = 'flex';
     renderLogin();
+    maybeShowInstallBanner();
   }
 
   if ('serviceWorker' in navigator) {
