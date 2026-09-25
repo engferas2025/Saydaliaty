@@ -36,6 +36,14 @@
         <input type="checkbox" id="remember-me" checked style="width:auto"> تذكرني على هذا الجهاز
       </label>
     </div>
+    <div style="text-align:center;margin-top:1.4rem">
+      <button type="button" class="btn-ghost" style="font-size:.78rem" onclick="toggleAltLogin()">دخول بحساب آخر</button>
+    </div>
+    <div id="login-alt-form" style="display:none;margin-top:.8rem">
+      <div class="field"><input type="text" id="alt-login-name" placeholder="اسم المستخدم"></div>
+      <div class="field"><input type="password" id="alt-login-pass" placeholder="كلمة المرور"></div>
+      <button class="btn btn-primary" onclick="altLogin()">دخول</button>
+    </div>
   </div>
 </div>
 
@@ -62,6 +70,7 @@
       </button>
     </div>
   </header>
+  <div class="datetime-bar" id="topbar-datetime"></div>
 
   <main>
     <!-- ---------- لوحة الإحصائيات ---------- -->
@@ -74,6 +83,7 @@
       <div class="filters">
         <select id="dash-filter-nurse" class="chip-select" onchange="State.filterNurse=this.value;renderDashboard()"></select>
         <select id="dash-filter-place" class="chip-select" onchange="State.filterPlace=this.value;renderDashboard()"></select>
+        <select id="dash-filter-medicine" class="chip-select" onchange="State.filterMedicine=this.value;renderDashboard()"></select>
       </div>
 
       <div class="stat-grid" style="margin-bottom:.9rem">
@@ -90,6 +100,14 @@
       <div class="card chart-card">
         <h3 style="margin-bottom:.8rem;font-size:1rem">اتجاه الصرف</h3>
         <canvas id="chart-trend" height="200"></canvas>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-bottom:.8rem;font-size:1rem">مشاركة التقرير</h3>
+        <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+          <button class="btn btn-outline" style="width:auto;flex:1" onclick="downloadReportPdf()">تنزيل PDF</button>
+          <button class="btn btn-primary" style="width:auto;flex:1" onclick="shareReportWhatsapp()">إرسال عبر واتساب</button>
+        </div>
       </div>
     </section>
 
@@ -133,6 +151,12 @@
       </form>
     </section>
 
+    <!-- ---------- سجل الحركات ---------- -->
+    <section id="screen-log" class="screen">
+      <h2 style="margin-bottom:1rem">سجل الحركات</h2>
+      <div id="log-list"></div>
+    </section>
+
     <!-- ---------- مراجعة المشرف ---------- -->
     <section id="screen-review" class="screen">
       <h2 style="margin-bottom:1rem">عمليات تحتاج مراجعة</h2>
@@ -143,7 +167,7 @@
     <section id="screen-places" class="screen">
       <h2 style="margin-bottom:1rem">الأماكن</h2>
       <form class="card" onsubmit="addPlace(event)" style="display:flex;gap:.6rem;align-items:flex-end">
-        <div class="field" style="flex:1;margin-bottom:0"><label>مكان جديد</label><input type="text" id="new-place-name" placeholder="مثال: مركز الرقة الصحي"></div>
+        <div class="field" style="flex:1;margin-bottom:0"><label>مكان جديد</label><input type="text" id="new-place-name" placeholder="مثال: مركز اللاذقية الصحي"></div>
         <button class="btn btn-primary" style="width:auto;padding:.68rem 1.1rem" type="submit">إضافة</button>
       </form>
       <div class="card"><div id="places-list"></div></div>
@@ -157,6 +181,13 @@
         <div class="list-row">
           <div class="main"><span class="title" id="settings-user-name"></span><span class="meta" id="settings-user-role"></span></div>
           <button class="btn-ghost" onclick="logout()">تسجيل الخروج</button>
+        </div>
+        <div class="field" style="margin-top:.8rem;margin-bottom:0">
+          <label>رقم الواتساب الخاص بك</label>
+          <div style="display:flex;gap:.5rem">
+            <input type="tel" id="my-phone" placeholder="9639xxxxxxxx">
+            <button class="btn btn-outline" style="width:auto;padding:.6rem 1rem" onclick="saveMyPhone()">حفظ</button>
+          </div>
         </div>
       </div>
 
@@ -188,27 +219,50 @@
       </div>
 
       <div id="settings-admin-only" style="display:none">
-        <div class="section-title">رابط المزامنة (Google Apps Script)</div>
-        <div class="card">
-          <div class="field" style="margin-bottom:.6rem"><input type="text" id="settings-api-url" placeholder="https://script.google.com/macros/s/.../exec"></div>
-          <button class="btn btn-primary" onclick="saveApiUrl()">حفظ الرابط</button>
-        </div>
-
-        <div class="section-title">إدارة الممرضين</div>
+        <div class="section-title">إدارة المستخدمين</div>
         <div class="card">
           <form id="add-nurse-form" onsubmit="addNurse(event)" style="margin-bottom:1rem">
-            <div class="field"><label>اسم الممرض</label><input type="text" id="new-nurse-name" required></div>
+            <div class="field"><label>الاسم</label><input type="text" id="new-nurse-name" required></div>
+            <div class="field">
+              <label>الصلاحية</label>
+              <div class="seg" id="new-user-role-seg">
+                <button type="button" data-role="nurse" class="active" onclick="setNewUserRole('nurse')">ممرض</button>
+                <button type="button" data-role="admin" onclick="setNewUserRole('admin')">مشرف</button>
+              </div>
+            </div>
             <div class="field"><label>رمز الدخول (4 أرقام)</label><input type="text" inputmode="numeric" maxlength="4" id="new-nurse-pin" required></div>
-            <button class="btn btn-primary" type="submit">إضافة ممرض</button>
+            <div class="field"><label>رقم الواتساب (اختياري — لإرسال بيانات الدخول والتقارير)</label><input type="tel" id="new-nurse-phone" placeholder="9639xxxxxxxx"></div>
+            <button class="btn btn-primary" type="submit">إضافة مستخدم</button>
           </form>
           <hr class="divider">
           <div id="users-admin-list"></div>
+        </div>
+      </div>
+
+      <div id="settings-dev-only" style="display:none">
+        <div class="section-title">رابط المزامنة (Google Apps Script)</div>
+        <div class="card">
+          <div class="field" style="margin-bottom:.6rem"><input type="text" id="settings-api-url" placeholder="https://script.google.com/macros/s/.../exec"></div>
+          <div id="api-url-warning" style="display:none;margin-bottom:.8rem">
+            <p style="font-size:.85rem;color:var(--danger);margin-bottom:.6rem">⚠️ تعديل هذا الرابط أو حذفه بالخطأ قد يوقف مزامنة التطبيق بالكامل مع كل الأجهزة. للمتابعة، جاوب على السؤال:</p>
+            <div class="field" style="margin-bottom:.6rem"><label id="captcha-question-label"></label><input type="number" id="captcha-answer-input"></div>
+            <div style="display:flex;gap:.5rem">
+              <button type="button" class="btn btn-primary" style="width:auto;padding:.6rem 1rem" onclick="checkCaptcha()">تحقق وفتح التعديل</button>
+              <button type="button" class="btn btn-outline" style="width:auto;padding:.6rem 1rem" onclick="cancelApiUrlEdit()">إلغاء</button>
+            </div>
+          </div>
+          <button class="btn btn-primary" id="api-url-save-btn" onclick="saveApiUrl()">حفظ الرابط</button>
+          <button class="btn btn-outline" id="api-url-edit-btn" style="display:none" onclick="requestApiUrlEdit()">تعديل الرابط</button>
         </div>
       </div>
     </section>
   </main>
 
   <nav class="tabbar" id="tabbar"></nav>
+</div>
+
+<div id="sheet-backdrop" class="sheet-backdrop" onclick="closeSheetBackdrop(event)">
+  <div class="sheet" id="sheet-content"></div>
 </div>
 
 <div id="toast" class="toast"></div>
