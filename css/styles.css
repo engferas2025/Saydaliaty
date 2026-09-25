@@ -433,6 +433,37 @@ main { flex: 1; padding: 1rem 1.1rem 6rem; max-width: 720px; width: 100%; margin
 }
 .offline-banner.show { display: block; }
 
+.install-banner {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: .6rem;
+  background: var(--primary-soft);
+  color: var(--primary);
+  text-align: center;
+  font-size: .8rem;
+  font-weight: 600;
+  padding: .5rem .8rem;
+}
+.install-banner.show { display: flex; }
+.install-banner button {
+  border: none;
+  background: var(--primary);
+  color: var(--primary-ink);
+  border-radius: 999px;
+  padding: .3rem .9rem;
+  font-size: .75rem;
+  cursor: pointer;
+  font-weight: 700;
+}
+.install-banner button.dismiss {
+  background: none;
+  color: var(--primary);
+  padding: .3rem .5rem;
+  font-size: .95rem;
+}
+
 .sheet-backdrop {
   position: fixed; inset: 0;
   background: rgba(0,0,0,.4);
