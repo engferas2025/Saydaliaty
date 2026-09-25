@@ -18,7 +18,7 @@ const Sync = {
     await DB.setMeta('apiUrl', url.trim());
   },
 
-  COLLECTIONS: ['medicines', 'places', 'movements'],
+  COLLECTIONS: ['users', 'medicines', 'places', 'movements'],
 
   async pendingCount() {
     let n = 0;

