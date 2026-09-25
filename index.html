@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>صيدليتي</title>
+<meta name="theme-color" content="#2F6F5E">
+<link rel="manifest" href="./manifest.json">
+<link rel="icon" href="./icons/icon-192.png">
+<link rel="apple-touch-icon" href="./icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@600;700;800&family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/styles.css">
+</head>
+<body>
+
+<div id="offline-banner" class="offline-banner">أنت غير متصل بالانترنت — البيانات تُحفظ محلياً وستتم مزامنتها تلقائياً</div>
+
+<!-- ============ شاشة الدخول ============ -->
+<div id="screen-login-wrap" class="login-wrap" style="display:none">
+  <div class="login-mark">ص</div>
+  <div class="login-card">
+    <h1 style="text-align:center;margin-bottom:.3rem">صيدليتي</h1>
+    <p style="text-align:center;color:var(--ink-soft);margin-bottom:1.4rem">اختر اسمك وأدخل رمز الدخول</p>
+    <div id="login-name-grid" class="name-grid"></div>
+    <div id="login-pin-area" style="display:none">
+      <div id="login-pin-dots" class="pin-dots"></div>
+      <div class="keypad">
+        <button onclick="pinPress('1')">1</button><button onclick="pinPress('2')">2</button><button onclick="pinPress('3')">3</button>
+        <button onclick="pinPress('4')">4</button><button onclick="pinPress('5')">5</button><button onclick="pinPress('6')">6</button>
+        <button onclick="pinPress('7')">7</button><button onclick="pinPress('8')">8</button><button onclick="pinPress('9')">9</button>
+        <button></button><button onclick="pinPress('0')">0</button><button onclick="pinBackspace()">⌫</button>
+      </div>
+      <label style="display:flex;align-items:center;gap:.4rem;margin-top:1.1rem;font-size:.85rem;color:var(--ink-soft)">
+        <input type="checkbox" id="remember-me" checked style="width:auto"> تذكرني على هذا الجهاز
+      </label>
+    </div>
+  </div>
+</div>
+
+<!-- ============ التطبيق الرئيسي ============ -->
+<div id="app" style="display:none">
+  <header class="topbar">
+    <div class="brand">
+      <span class="mark">ص</span>
+      <span>
+        <div class="name">صيدليتي</div>
+        <div class="sub" id="current-user-name"></div>
+      </span>
+    </div>
+    <div class="topbar-actions">
+      <button class="icon-btn" onclick="Sync.fullSync()" title="تحديث">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 10-3 6.7"/><path d="M21 5v6h-6"/></svg>
+      </button>
+      <button class="icon-btn" onclick="showScreen('review')" style="position:relative" title="تنبيهات">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l10 18H2L12 3z"/><path d="M12 10v4M12 17h.01"/></svg>
+        <span id="review-badge-icon"></span>
+      </button>
+      <button class="icon-btn" onclick="logout()" title="تسجيل الخروج">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <!-- ---------- لوحة الإحصائيات ---------- -->
+    <section id="screen-dashboard" class="screen">
+      <div class="seg" id="period-seg" style="margin-bottom:.9rem">
+        <button data-p="day" class="active" onclick="setPeriod('day')">اليوم</button>
+        <button data-p="week" onclick="setPeriod('week')">الأسبوع</button>
+        <button data-p="month" onclick="setPeriod('month')">الشهر</button>
+      </div>
+      <div class="filters">
+        <select id="dash-filter-nurse" class="chip-select" onchange="State.filterNurse=this.value;renderDashboard()"></select>
+        <select id="dash-filter-place" class="chip-select" onchange="State.filterPlace=this.value;renderDashboard()"></select>
+      </div>
+
+      <div class="stat-grid" style="margin-bottom:.9rem">
+        <div class="stat-card accent"><div class="num" id="stat-remaining">0</div><div class="label">إجمالي المتبقي بالمستودع</div></div>
+        <div class="stat-card"><div class="num" id="stat-out">0</div><div class="label">المصروف بالفترة المختارة</div></div>
+        <div class="stat-card"><div class="num" id="stat-items">0</div><div class="label">عدد الأصناف</div></div>
+        <div class="stat-card warn"><div class="num" id="stat-alerts">0</div><div class="label">حالات تحتاج مراجعة</div></div>
+      </div>
+
+      <div class="card chart-card">
+        <h3 style="margin-bottom:.8rem;font-size:1rem">نسبة المتبقي إلى المصروف</h3>
+        <canvas id="chart-donut" height="200"></canvas>
+      </div>
+      <div class="card chart-card">
+        <h3 style="margin-bottom:.8rem;font-size:1rem">اتجاه الصرف</h3>
+        <canvas id="chart-trend" height="200"></canvas>
+      </div>
+    </section>
+
+    <!-- ---------- المستودع ---------- -->
+    <section id="screen-inventory" class="screen">
+      <h2 style="margin-bottom:1rem">المستودع</h2>
+      <div class="card"><div id="inventory-list"></div></div>
+    </section>
+
+    <!-- ---------- تسجيل عملية ---------- -->
+    <section id="screen-entry" class="screen">
+      <h2 style="margin-bottom:1rem">تسجيل عملية</h2>
+      <div class="seg" id="entry-seg" style="margin-bottom:1rem">
+        <button data-t="in" class="active" onclick="setEntryType('in')">إدخال</button>
+        <button data-t="out" onclick="setEntryType('out')">صرف</button>
+        <button data-t="transfer" onclick="setEntryType('transfer')">تسليم لممرض</button>
+      </div>
+      <form id="entry-form" class="card" onsubmit="submitEntry(event)">
+        <div class="field">
+          <label>الدواء</label>
+          <select id="entry-medicine" onchange="onMedicineChange()"></select>
+        </div>
+        <div id="new-medicine-fields" style="display:none">
+          <div class="field"><label>اسم الدواء الجديد</label><input type="text" id="new-medicine-name" placeholder="مثال: باراسيتامول 500"></div>
+          <div class="field"><label>الوحدة</label><input type="text" id="new-medicine-unit" placeholder="شريط / علبة / حبة"></div>
+        </div>
+        <div class="field"><label>الكمية</label><input type="number" min="1" id="entry-qty" required></div>
+        <div class="field" id="entry-field-delivered-by">
+          <label>تم التسليم بواسطة</label>
+          <input type="text" id="entry-delivered-by" placeholder="اسم المورّد أو الجهة">
+        </div>
+        <div class="field" id="entry-field-place" style="display:none">
+          <label>المكان المستفيد</label>
+          <select id="entry-place"></select>
+        </div>
+        <div class="field" id="entry-field-to-nurse" style="display:none">
+          <label>تسليم إلى الممرض</label>
+          <select id="entry-to-nurse"></select>
+        </div>
+        <button class="btn btn-primary" id="entry-submit" type="submit">تسجيل الإدخال</button>
+      </form>
+    </section>
+
+    <!-- ---------- مراجعة المشرف ---------- -->
+    <section id="screen-review" class="screen">
+      <h2 style="margin-bottom:1rem">عمليات تحتاج مراجعة</h2>
+      <div id="review-list"></div>
+    </section>
+
+    <!-- ---------- إدارة الأماكن ---------- -->
+    <section id="screen-places" class="screen">
+      <h2 style="margin-bottom:1rem">الأماكن</h2>
+      <form class="card" onsubmit="addPlace(event)" style="display:flex;gap:.6rem;align-items:flex-end">
+        <div class="field" style="flex:1;margin-bottom:0"><label>مكان جديد</label><input type="text" id="new-place-name" placeholder="مثال: مركز الرقة الصحي"></div>
+        <button class="btn btn-primary" style="width:auto;padding:.68rem 1.1rem" type="submit">إضافة</button>
+      </form>
+      <div class="card"><div id="places-list"></div></div>
+    </section>
+
+    <!-- ---------- الإعدادات ---------- -->
+    <section id="screen-settings" class="screen">
+      <h2 style="margin-bottom:1rem">الإعدادات</h2>
+
+      <div class="card">
+        <div class="list-row">
+          <div class="main"><span class="title" id="settings-user-name"></span><span class="meta" id="settings-user-role"></span></div>
+          <button class="btn-ghost" onclick="logout()">تسجيل الخروج</button>
+        </div>
+      </div>
+
+      <div class="section-title">المظهر</div>
+      <div class="card">
+        <div class="field">
+          <label>الوضع</label>
+          <div class="seg" id="theme-seg">
+            <button data-theme="light" class="active" onclick="setTheme('light')">نهاري</button>
+            <button data-theme="dark" onclick="setTheme('dark')">ليلي</button>
+          </div>
+        </div>
+        <div class="field" style="margin-bottom:0">
+          <label>حجم الخط: <span id="font-scale-label">100%</span></label>
+          <div style="display:flex;gap:.6rem">
+            <button class="btn btn-outline" style="width:auto;padding:.5rem 1rem" onclick="changeFontScale(-0.05)">A-</button>
+            <button class="btn btn-outline" style="width:auto;padding:.5rem 1rem" onclick="changeFontScale(0.05)">A+</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-title">التطبيق</div>
+      <div class="card">
+        <button class="btn btn-outline" id="install-btn" style="display:none;margin-bottom:.7rem" onclick="installApp()">تثبيت التطبيق على الشاشة الرئيسية</button>
+        <div class="list-row">
+          <div class="main"><span class="title">آخر مزامنة</span><span class="meta" id="settings-last-sync"></span></div>
+          <button class="btn-ghost" onclick="Sync.fullSync()">مزامنة الآن</button>
+        </div>
+      </div>
+
+      <div id="settings-admin-only" style="display:none">
+        <div class="section-title">رابط المزامنة (Google Apps Script)</div>
+        <div class="card">
+          <div class="field" style="margin-bottom:.6rem"><input type="text" id="settings-api-url" placeholder="https://script.google.com/macros/s/.../exec"></div>
+          <button class="btn btn-primary" onclick="saveApiUrl()">حفظ الرابط</button>
+        </div>
+
+        <div class="section-title">إدارة الممرضين</div>
+        <div class="card">
+          <form id="add-nurse-form" onsubmit="addNurse(event)" style="margin-bottom:1rem">
+            <div class="field"><label>اسم الممرض</label><input type="text" id="new-nurse-name" required></div>
+            <div class="field"><label>رمز الدخول (4 أرقام)</label><input type="text" inputmode="numeric" maxlength="4" id="new-nurse-pin" required></div>
+            <button class="btn btn-primary" type="submit">إضافة ممرض</button>
+          </form>
+          <hr class="divider">
+          <div id="users-admin-list"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <nav class="tabbar" id="tabbar"></nav>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="./js/db.js"></script>
+<script src="./js/sync.js"></script>
+<script src="./js/app.js"></script>
+</body>
+</html>
