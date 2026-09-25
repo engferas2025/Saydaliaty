@@ -16,6 +16,11 @@
 <body>
 
 <div id="offline-banner" class="offline-banner">أنت غير متصل بالانترنت — البيانات تُحفظ محلياً وستتم مزامنتها تلقائياً</div>
+<div id="install-banner" class="install-banner">
+  <span>📲 ثبّت "صيدليتي" على جهازك لتجربة أسرع وأوفلاين أفضل</span>
+  <button onclick="installApp()">تثبيت</button>
+  <button class="dismiss" onclick="dismissInstallBanner()">✕</button>
+</div>
 
 <!-- ============ شاشة الدخول ============ -->
 <div id="screen-login-wrap" class="login-wrap" style="display:none">
@@ -128,11 +133,11 @@
       <form id="entry-form" class="card" onsubmit="submitEntry(event)">
         <div class="field">
           <label>الدواء</label>
-          <select id="entry-medicine" onchange="onMedicineChange()"></select>
+          <input type="text" id="entry-medicine-input" list="medicine-options" placeholder="اكتب اسم الدواء (بحث فوري أو دواء جديد)" autocomplete="off" oninput="onMedicineInputChange()">
+          <datalist id="medicine-options"></datalist>
         </div>
         <div id="new-medicine-fields" style="display:none">
-          <div class="field"><label>اسم الدواء الجديد</label><input type="text" id="new-medicine-name" placeholder="مثال: باراسيتامول 500"></div>
-          <div class="field"><label>الوحدة</label><input type="text" id="new-medicine-unit" placeholder="شريط / علبة / حبة"></div>
+          <div class="field"><label>الوحدة (لأن هذا اسم دواء جديد)</label><input type="text" id="new-medicine-unit" placeholder="شريط / علبة / حبة"></div>
         </div>
         <div class="field"><label>الكمية</label><input type="number" min="1" id="entry-qty" required></div>
         <div class="field" id="entry-field-delivered-by">
@@ -141,7 +146,8 @@
         </div>
         <div class="field" id="entry-field-place" style="display:none">
           <label>المكان المستفيد</label>
-          <select id="entry-place"></select>
+          <input type="text" id="entry-place-input" list="place-options" placeholder="اكتب أو اختر اسم المكان" autocomplete="off">
+          <datalist id="place-options"></datalist>
         </div>
         <div class="field" id="entry-field-to-nurse" style="display:none">
           <label>تسليم إلى الممرض</label>
@@ -211,11 +217,20 @@
 
       <div class="section-title">التطبيق</div>
       <div class="card">
-        <button class="btn btn-outline" id="install-btn" style="display:none;margin-bottom:.7rem" onclick="installApp()">تثبيت التطبيق على الشاشة الرئيسية</button>
+        <div class="list-row">
+          <div class="main"><span class="title">التثبيت على الجهاز</span><span class="meta" id="install-status">جارِ التحقق...</span></div>
+          <button class="btn btn-outline" style="width:auto;padding:.5rem 1rem" onclick="installApp()">تثبيت</button>
+        </div>
+        <hr class="divider">
         <div class="list-row">
           <div class="main"><span class="title">آخر مزامنة</span><span class="meta" id="settings-last-sync"></span></div>
           <button class="btn-ghost" onclick="Sync.fullSync()">مزامنة الآن</button>
         </div>
+      </div>
+
+      <div class="section-title">النسخة الاحتياطية</div>
+      <div class="card" id="settings-backup-section" style="display:none">
+        <button class="btn btn-outline" onclick="exportBackup()">تصدير نسخة احتياطية (JSON)</button>
       </div>
 
       <div id="settings-admin-only" style="display:none">

@@ -1,5 +1,5 @@
 // service-worker.js — يخزّن هيكل التطبيق محلياً حتى يفتح ويشتغل بدون انترنت
-const CACHE_NAME = 'saydaliaty-v1';
+const CACHE_NAME = 'saydaliaty-v2';
 const APP_SHELL = [
   './',
   './index.html',
