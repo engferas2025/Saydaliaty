@@ -127,6 +127,16 @@ a { color: var(--primary); }
 
 .topbar-actions { display: flex; align-items: center; gap: .4rem; }
 
+.datetime-bar {
+  text-align: center;
+  font-size: .74rem;
+  color: var(--ink-soft);
+  padding: .35rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+
 .icon-btn {
   width: 38px; height: 38px;
   border-radius: 999px;
